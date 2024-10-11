@@ -1,0 +1,28 @@
+model:
+  skip_ch: 64
+  aux_losses: 2
+  encoder: default
+  use_cgm: True
+
+data:
+  num_classes: 1
+  num_workers: 0
+  batch_size: 4
+  max_training_samples: -1
+  data_dir: '../beadnet_dataset'
+  
+train:
+  seed: 47
+  epochs: 1000
+  lr: 0.001
+  weight_decay: 0.0005
+  optimizer: adamw
+  accum_steps: 4
+  resume: ''
+  save_name: u3p_bead
+  loss_type: u3p
+  warmup_iters: 3000
+
+  logger:
+    use_tensorboard: True
+    log_dir: ./runs
