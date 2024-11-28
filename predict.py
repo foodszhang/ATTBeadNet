@@ -4,7 +4,7 @@ import torch
 import argparse
 import skimage as ski
 import utils
-from  utils.mytransforms import min_max_normalization
+from utils.mytransforms import min_max_normalization
 import matplotlib.pyplot as plt
 from skimage import measure
 from skimage import data, restoration, util
@@ -15,6 +15,10 @@ from utils import cal_score_origin
 import shutil
 import time
 
+from torchvision.models.detection import (
+    maskrcnn_resnet50_fpn,
+    MaskRCNN_ResNet50_FPN_Weights,
+)
 
 
 def main(args):
@@ -32,24 +36,42 @@ def main(args):
     cfg.freeze()
 
     import random
+
     seed = 42
     torch.cuda.manual_seed_all(seed)
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
 
-    device = 'cpu'
-    model, data = cfg.model, cfg.data
-    model = build_unet3plus(data.num_classes, model.encoder, model.skip_ch, model.aux_losses, model.use_cgm, model.pretrained, model.dropout, am="CBAM")
-    checkpoint = torch.load('./runs/u3p_bead/u3p_bead_best.ckpt')
-    model.load_state_dict(checkpoint['state_dict'])
+    device = "cpu"
+    if cfg.model.name == "Unet3":
+        model, data = cfg.model, cfg.data
+        model = build_unet3plus(
+            data.num_classes,
+            model.encoder,
+            model.skip_ch,
+            model.aux_losses,
+            model.use_cgm,
+            model.pretrained,
+            model.dropout,
+            am="CBAM",
+        )
+    elif cfg.model.name == "MaskRCNN":
+        model = maskrcnn_resnet50_fpn()
+    checkpoint = torch.load("./runs/u3p_bead/u3p_bead_last.ckpt")
+    # checkpoint = torch.load('./runs/u3p_bead/u3p_bead_best.ckpt')
+    model.load_state_dict(checkpoint["state_dict"])
     model.eval()
-    base_dir = './dataset/'
-    data_dir = f'{base_dir}'
-    result_dir = f'./results/'
+    base_dir = "./data/20240911_60X_flat_clip_test/"
+    data_dir = f"{base_dir}"
+    result_dir = f"./results/"
     os.makedirs(result_dir, exist_ok=True)
     for imgname in os.listdir(data_dir):
-        if not imgname.endswith('.tif') or imgname.endswith('label.tif') or imgname.endswith('mask.tif'):
+        if (
+            not imgname.endswith(".tif")
+            or imgname.endswith("label.tif")
+            or imgname.endswith("mask.tif")
+        ):
             continue
         img = ski.io.imread(os.path.join(data_dir, imgname))
         pure_img = img.copy()
@@ -60,23 +82,31 @@ def main(args):
         net_input = min_max_normalization(img=img, min_value=0, max_value=4095)
         net_input = np.transpose(np.expand_dims(net_input, axis=0), [0, 3, 1, 2])
         net_input = torch.from_numpy(net_input)
-        outputs = model(net_input)
-        target = outputs
-        prediction = torch.sigmoid(target)
-        p = prediction[0][0]
-        p = p.detach().cpu().numpy()
-        _, bead_seeds, num_beads = seed_detection(prediction)
-        bead_seeds = bead_seeds[pads[0]:, pads[1]:, :]
-        pos = np.argwhere(bead_seeds[:,:,0] > 0.5)
-        
-        for p in pos:
-            rr,cc = ski.draw.circle_perimeter(*p, 2, shape=pure_img.shape)
-            pure_img[rr,cc] = [255,0,0]
-        ski.io.imsave(f'{result_dir}{imgname.split(".")[0]}.png', pure_img.astype(np.uint8))
-        ski.io.imsave(f'{result_dir}{imgname.split(".")[0]}_mask.tif', bead_seeds)
+        if cfg.model.name == "Unet3":
+            outputs = model(net_input)
+            target = outputs
+            prediction = torch.sigmoid(target)
+            p = prediction[0][0]
+            p = p.detach().cpu().numpy()
+            _, bead_seeds, num_beads = seed_detection(prediction)
+            bead_seeds = bead_seeds[pads[0] :, pads[1] :, :]
+            pos = np.argwhere(bead_seeds[:, :, 0] > 0.5)
+
+            for p in pos:
+                rr, cc = ski.draw.circle_perimeter(*p, 2, shape=pure_img.shape)
+                pure_img[rr, cc] = [255, 0, 0]
+            ski.io.imsave(
+                f'{result_dir}{imgname.split(".")[0]}.png', pure_img.astype(np.uint8)
+            )
+            ski.io.imsave(f'{result_dir}{imgname.split(".")[0]}_mask.tif', bead_seeds)
+        elif cfg.model.name == "MaskRCNN":
+            print("444444", net_input.shape)
+            outputs = model(net_input)
+        # break
+
 
 def seed_detection(prediction):
-    """ Extract seeds out of the raw predictions.
+    """Extract seeds out of the raw predictions.
 
     :param prediction: Raw prediction of a bead image
         :type prediction:
@@ -98,29 +128,23 @@ def seed_detection(prediction):
 
     return beads, bead_seeds, int(num_beads)
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train segmentation network')
-    
-    parser.add_argument('--cfg',
-                        help='experiment configure file name',
-                        default="config/bead.yaml",
-                        type=str)
-    parser.add_argument('--seed',
-                        help='random seed',
-                        default=None)
-    parser.add_argument('--resume',
-                        help='resume from checkpoint',
-                        default=None,
-                        type=str)
-    parser.add_argument('--data_dir',
-                        default=None,
-                        type=str)
-    parser.add_argument('--use_wandb',
-                        default=None,
-                        type=int)
-    parser.add_argument('--use_tensorboard',
-                        default=None,
-                        type=int)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train segmentation network")
+
+    parser.add_argument(
+        "--cfg",
+        help="experiment configure file name",
+        default="config/bead.yaml",
+        type=str,
+    )
+    parser.add_argument("--seed", help="random seed", default=None)
+    parser.add_argument(
+        "--resume", help="resume from checkpoint", default=None, type=str
+    )
+    parser.add_argument("--data_dir", default=None, type=str)
+    parser.add_argument("--use_wandb", default=None, type=int)
+    parser.add_argument("--use_tensorboard", default=None, type=int)
 
     args = parser.parse_args()
     main(args)

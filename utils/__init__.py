@@ -5,7 +5,7 @@ from skimage import measure
 
 
 def zero_pad_model_input(img_upsampled):
-    """ Zero-pad model input to get for the model needed sizes.
+    """Zero-pad model input to get for the model needed sizes.
 
     :param img_upsampled:
         :type img_upsampled:
@@ -15,7 +15,7 @@ def zero_pad_model_input(img_upsampled):
     """
 
     pads = []
-    
+
     for i in range(0, 2):  # 0: y-pads, 1: x-pads
 
         if img_upsampled.shape[i] < 128:
@@ -100,22 +100,26 @@ def zero_pad_model_input(img_upsampled):
 
         else:
             return 1, 1, 1
-    img_upsampled = np.pad(img_upsampled, ((pads[0], 0), (pads[1], 0), (0, 0)), mode='constant')
+    img_upsampled = np.pad(
+        img_upsampled, ((pads[0], 0), (pads[1], 0), (0, 0)), mode="constant"
+    )
 
     return img_upsampled, pads, 0
 
+
 def cal_score_origin(label, pred):
-    _, label_beed_seed, _ =  seed_detection(label)
-    _, pred_beed_seed, _ =  seed_detection(pred)
-    label_pos = np.argwhere(label_beed_seed>0)
-    pred_pos = np.argwhere(pred_beed_seed>0)
-    cost_matrix = sci.spatial.distance.cdist(label_pos, pred_pos, 'euclidean')
+    _, label_beed_seed, _ = seed_detection(label)
+    _, pred_beed_seed, _ = seed_detection(pred)
+    label_pos = np.argwhere(label_beed_seed > 0)
+    pred_pos = np.argwhere(pred_beed_seed > 0)
+    cost_matrix = sci.spatial.distance.cdist(label_pos, pred_pos, "euclidean")
     row, col = sci.optimize.linear_sum_assignment(cost_matrix)
     TP, TN, FP, FN = 0, 0, 0, 0
     for x, y in zip(row, col):
         if cost_matrix[x, y] < 3:
             TP += 1
     return TP, len(label_pos), len(pred_pos)
+
 
 def seed_detection(prediction):
     beads = prediction > 0.5
@@ -126,13 +130,9 @@ def seed_detection(prediction):
         centroid = np.round(props_seeds[i].centroid).astype(np.uint16)
         bead_seeds[tuple(centroid)] = True
 
-    #beads = np.expand_dims(beads, axis=-1)
-    #bead_seeds = np.expand_dims(bead_seeds, axis=-1)
+    # beads = np.expand_dims(beads, axis=-1)
+    # bead_seeds = np.expand_dims(bead_seeds, axis=-1)
 
     num_beads = np.sum(bead_seeds)
 
     return beads, bead_seeds, int(num_beads)
-
-
-
-
