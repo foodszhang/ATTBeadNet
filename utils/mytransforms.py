@@ -31,6 +31,8 @@ def min_max_normalization(img, min_value=None, max_value=None):
     img = np.clip(img, min_value, max_value)
 
     # Apply Min-max-normalization
+    # img = 2 * (img.astype(np.float32) - min_value) / (max_value - min_value) - 1
+    # img = 2 * (img.astype(np.float32) - min_value) / (max_value - min_value) - 1
     img = 2 * (img.astype(np.float32) - min_value) / (max_value - min_value) - 1
 
     return img.astype(np.float32)
@@ -355,10 +357,12 @@ class ToTensor(object):
 
         img, label, img_id = sample["image"], sample["label"], sample["id"]
 
+        print("before123123123", img.min(), img.max())
         # Normalize image
         img = min_max_normalization(
             img, min_value=self.min_value, max_value=self.max_value
         )
+        print("after123123123", img.min(), img.max())
 
         # Swap axes from (H, W, Channels) to (Channels, H, W)
         if len(img.shape) == 2:

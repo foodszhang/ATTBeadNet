@@ -2,10 +2,12 @@ import argparse
 import math
 from tqdm import tqdm, trange
 import numpy as np
+import json
 import os
 import os.path as osp
 from pathlib import Path
 import pandas as pd
+import time
 
 import torch
 from torch.optim import SGD, Adam, AdamW, lr_scheduler
@@ -21,12 +23,43 @@ from utils.loss import get_loss
 from utils.logger import AverageMeter, SummaryLogger
 from utils.metrics import StreamSegMetrics
 from utils.mytransforms import augmentors
-from datasets import TestMaskRcnnDatasetFromSubset, OriginBeadDataset, DatasetFromSubset
-from utils import cal_score_origin
+from datasets import MaskBeadDataset, OriginBeadDataset, DatasetFromSubset
+from utils import cal_score_origin, cal_maskrcnn_score
 from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
     MaskRCNN_ResNet50_FPN_Weights,
 )
+from model.yolo import YoloBody
+from model.yolo_training import YOLOLoss
+import utils.transforms as T
+from utils.maskrcnn import reduce_dict
+import cv2
+import utils.bbox as bbox
+import skimage as ski
+
+
+def collate_fn(batch):
+    return tuple(zip(*batch))
+
+
+def base_transform():
+    transforms = []
+    transforms.append(T.ToTensor())
+
+    return T.Compose(transforms)
+
+
+def get_transform(train):
+    transforms = []
+    # converts the image, a PIL image, into a PyTorch Tensor
+
+    if train:
+        # during training, randomly flip the training images
+        # and ground-truth for data augmentation
+        transforms.append(T.NormTrans(0.4))
+    transforms.append(T.ToTensor())
+
+    return T.Compose(transforms)
 
 
 def one_cycle(y1=0.0, y2=1.0, steps=100):
@@ -45,6 +78,7 @@ class Trainer:
     best_val_score_dict = None
     best_val_loss = 100
     best_val_f1 = 0
+    val_dict = dict()
 
     def __init__(self, cfg, model, train_loader, val_loader):
         self.cfg_all = cfg
@@ -140,7 +174,7 @@ class Trainer:
             + f"{self.epoch + 1}/{self.cfg.epochs}",
         )  # progress bar
         for i, batch in pbar:
-            self.warmup()
+            # self.warmup()
             # imgs, masks = batch[0].to(device), batch[1].to(device, dtype=torch.long)
             # imgs, masks = batch[0].to(device), batch[1].to(device)
             self.global_iter += batch_size
@@ -150,13 +184,53 @@ class Trainer:
                     preds = model(imgs)["final_pred"]
                     loss = self.criterion(preds, masks)
                 elif self.cfg_all.model.name == "MaskRCNN":
-                    imgs, masks, labels = batch
-                    if masks[0]["boxes"].shape[0] == 0:
 
-                        continue
-                    loss = model(imgs, masks)
-                    # print("4234234234", loss)
-                    loss = loss["loss_mask"]
+                    imgs, targets = batch
+                    imgs = list(image.to(device) for image in imgs)
+                    targets = [
+                        {
+                            k: v.to(device) if isinstance(v, torch.Tensor) else v
+                            for k, v in t.items()
+                        }
+                        for t in targets
+                    ]
+                    loss_dict = model(imgs, targets)
+                    loss = sum(loss for loss in loss_dict.values())
+                    loss_dict_reduced = reduce_dict(loss_dict)
+                    losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+                    loss_value = losses_reduced.item()
+
+                    if not math.isfinite(loss_value):
+                        print(f"Loss is {loss_value}, stopping training")
+                        print(loss_dict_reduced)
+                        import sys
+
+                        sys.exit(1)
+                elif self.cfg_all.model.name == "Yolo":
+
+                    imgs, targets = batch
+                    labels = []
+                    for i, t in enumerate(targets):
+                        nL = len(t["boxes"])
+                        labels_out = np.zeros((nL, 6))
+                        box = t["boxes"]
+                        box[:, [0, 2]] = box[:, [0, 2]] / 128
+                        box[:, [1, 3]] = box[:, [1, 3]] / 128
+                        # box[:, [0, 2]] = box[:, [0, 2]]
+                        # box[:, [1, 3]] = box[:, [1, 3]]
+                        box[:, 2:4] = box[:, 2:4] - box[:, 0:2]
+                        box[:, 0:2] = box[:, 0:2] + box[:, 2:4] / 2
+                        labels_out[:, 1] = 0
+                        labels_out[:, 2:] = box[:, :4]
+                        labels_out[:, 0] = i
+                        labels.append(labels_out)
+                    labels = torch.from_numpy(np.concatenate(labels, 0)).to(device)
+                    imgs = torch.stack(imgs).to(device)
+                    outputs = model(imgs)
+                    loss = self.criterion(outputs, labels, imgs)
+                    loss = loss[0]
+                    # outputs = self.bbox_utils.decode_box(outputs)
+
             self.update_loss_dict(self.loss_dict, {"loss": loss})
             self.scaler.scale(loss).backward()
             if (i + 1) % accum_steps == 0 or i == num_batches - 1:
@@ -179,6 +253,14 @@ class Trainer:
             if val_f1.avg > self.best_val_f1:
                 self.best_val_f1 = val_f1.avg
                 self.save_checkpoint(self.cfg.save_name + "_best.ckpt")
+                data = {
+                    "f1": val_f1.avg,
+                    "P": self.val_dict["P"],
+                    "per_time": self.val_dict["per_time"],
+                    "R": self.val_dict["R"],
+                }
+                with open("best_f1.json", "w") as f:
+                    json.dump(data, f)
             self.log_results()
         self.save_checkpoint(self.cfg.save_name + "_last.ckpt")
         self.scheduler.step()
@@ -231,6 +313,20 @@ class Trainer:
 
         for k, v in self.loss_dict.items():
             log_dict["Train"][k] = v.avg
+        print(
+            "eeeee loss:",
+            self.loss_dict["loss"].avg,
+            "f1:",
+            self.val_f1_dict["f1"].avg,
+            "P:",
+            self.val_dict["P"],
+            "R:",
+            self.val_dict["R"],
+            "label_sum:",
+            self.val_dict["label_sum"],
+            "pred_sum:",
+            self.val_dict["pred_sum"],
+        )
         self.update_loss_dict(self.loss_dict, None)
         log_dict["Train"]["lr"] = self.optimizer.param_groups[0]["lr"]
 
@@ -248,7 +344,6 @@ class Trainer:
         #        continue
         #    log_dict["Val"][k] = v
         self.logger.summary(log_dict, self.global_iter)
-        print("eeeee loss:", log_dict["Train"]["loss"])
         print("qqqq lr:", log_dict["Train"]["lr"])
 
     def validate(self):
@@ -322,38 +417,26 @@ class Trainer:
                 pbar.close()
                 return score
             elif self.cfg_all.model.name == "MaskRCNN":
+                start_time = time.time()
+                total_sum = 0
                 for i, batch in pbar:
-                    images, targets, labels = batch
-                    predictions = self.model(images)
-                    print(
-                        "44444",
-                        len(predictions[0]["masks"]),
-                        len(predictions),
-                        len(targets),
-                    )
-                    masks = predictions[0]["masks"] > 0.5
-                    masks = torch.sum(masks, dim=0)
-                    masks = masks[0]
-                    masks = masks.type(torch.float32)
-                    t_masks = labels[0].type(torch.float32)
-                    loss = self.criterion(masks, t_masks)
-                    preds = masks.detach().cpu().numpy()
-                    targets = t_masks.cpu().numpy()
-                    tp, label, p = cal_score_origin(targets, preds)
-                    TP += tp
-                    label_sum += label
-                    pred_sum += p
+                    imgs, targets = batch
+                    imgs = list(image.to(device) for image in imgs)
+                    predictions = self.model(imgs)
+                    output_dir = "./output"
+                    os.makedirs(output_dir, exist_ok=True)
+                    for i, prediction in enumerate(predictions):
+                        img = imgs[i].mul(255).permute(1, 2, 0).byte().cpu().numpy()
+                        masks = prediction["masks"]
+                        ori_masks = targets[i]["masks"]
+                        masks = masks.detach().cpu().numpy()
+                        ori_masks = ori_masks.detach().cpu().numpy()
+                        tp, label, p = cal_maskrcnn_score(ori_masks, masks)
+                        TP += tp
+                        label_sum += label
+                        pred_sum += p
+                        total_sum += 1
 
-                    # mask = mask.detach().cpu().numpy()
-                    # for pred, target in zip(preds, targets):
-                    #    tp, label, p = cal_score_origin(target, pred)
-                    #    TP += tp
-                    #    label_sum += label
-                    #    pred_sum += p
-                    ## self.metrics.update(targets, preds)
-                    # loss = self.criterion(outputs, labels)
-                    # LOSS += loss
-                    LOSS += loss
                 if pred_sum != 0:
                     P = TP / pred_sum
                 else:
@@ -364,13 +447,74 @@ class Trainer:
                 else:
                     f1 = 2 * P * R / (P + R)
                 acc = R
-                LOSS /= len(self.val_loader)
-                pbar.close()
-                self.update_loss_dict(self.val_loss_dict, {"loss": LOSS})
+
+                self.update_loss_dict(self.val_loss_dict, {"loss": 1})
+
                 self.update_loss_dict(self.val_f1_dict, {"f1": f1})
-                score = self.metrics.get_results()
-                print("val_loss:", LOSS)
-                print("val_f1:", f1)
+                self.val_dict["f1"] = f1
+                self.val_dict["P"] = P
+                self.val_dict["R"] = R
+                self.val_dict["per_time"] = (time.time() - start_time) / total_sum
+                self.val_dict["label_sum"] = label_sum
+                self.val_dict["pred_sum"] = pred_sum
+                # score = self.metrics.get_results()
+                # print("val_loss:", LOSS)
+                # print("val_f1:", f1)
+            elif self.cfg_all.model.name == "Yolo":
+                start_time = time.time()
+                total_sum = 0
+                confidence = 0.1
+                num_classes = 1
+                for n, batch in pbar:
+                    imgs, targets = batch
+                    imgs = torch.stack(imgs).to(device)
+                    outputs = self.model(imgs)
+                    outputs = self.bbox_util.decode_box(outputs)
+                    results = self.bbox_util.non_max_suppression(
+                        torch.cat(outputs, 1),
+                        num_classes,
+                        (128, 128),
+                        (128, 128),
+                        False,
+                        conf_thres=confidence,
+                        nms_thres=0.01,
+                    )
+                    print("123123123", results)
+                    for j, result in enumerate(results):
+                        if result is None:
+                            continue
+                        img = imgs[j].mul(255).permute(1, 2, 0).byte().cpu().numpy()
+                        top_label = np.array(result[:, 6], dtype="int32")
+                        top_conf = result[:, 4] * result[:, 5]
+                        top_boxes = result[:, :4]
+                        back_img = np.zeros((128, 128, 3), dtype=np.uint8)
+                        for i, c in list(enumerate(top_label)):
+                            box = top_boxes[i]
+                            score = top_conf[i]
+                            print("66666", i, j, score)
+                            top, left, bottom, right = box
+
+                            top = max(0, np.floor(top).astype("int32"))
+                            left = max(0, np.floor(left).astype("int32"))
+                            bottom = min(img.shape[1], np.floor(bottom).astype("int32"))
+                            right = min(img.shape[0], np.floor(right).astype("int32"))
+                            rr, cc = ski.draw.rectangle(
+                                (top, left), end=(bottom, right), shape=back_img.shape
+                            )
+                            back_img[rr, cc] = [0, 255, 0]
+
+                        ski.io.imsave(f"./output/batch_{n}_{j}_mask.png", back_img)
+                        ski.io.imsave(f"./output/batch_{n}_{j}.png", img)
+
+                self.update_loss_dict(self.val_loss_dict, {"loss": 1})
+                self.update_loss_dict(self.val_f1_dict, {"f1": f1})
+                self.val_dict["f1"] = f1
+                self.val_dict["P"] = P
+                self.val_dict["R"] = R
+                # self.val_dict["per_time"] = (time.time() - start_time) / total_sum
+                self.val_dict["per_time"] = 0
+                self.val_dict["label_sum"] = label_sum
+                self.val_dict["pred_sum"] = pred_sum
 
 
 def main(args):
@@ -434,35 +578,93 @@ def main(args):
         trainer = Trainer(cfg, model, train_loader, val_loader)
         trainer.train()
     elif model.name == "MaskRCNN":
-        model = maskrcnn_resnet50_fpn()
-        data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
-        dataset = OriginBeadDataset(
-            root_dir=Path("./data/20240911_60X_flat_clip/"), img_ids=130
-        )
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [130, 1])
-        val_dataset = TestMaskRcnnDatasetFromSubset(
-            val_dataset, transform=data_transforms["val"]
-        )
-        train_dataset = TestMaskRcnnDatasetFromSubset(
-            train_dataset, transform=data_transforms["train"]
-        )
-        train_loader = train_dataset
-        val_loader = val_dataset
+        from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+        from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 
-        # train_loader = DataLoader(
-        #    train_dataset,
-        #    batch_size=data.batch_size,
-        #    shuffle=True,
-        #    num_workers=data.num_workers,
-        # )
-        # val_loader = DataLoader(
-        #    val_dataset,
-        #    batch_size=data.batch_size,
-        #    shuffle=False,
-        #    num_workers=data.num_workers,
-        # )
+        model = maskrcnn_resnet50_fpn()
+        in_features = model.roi_heads.box_predictor.cls_score.in_features
+        in_features_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
+        num_classes = 2
+        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        hidden_layer = 256
+        model.roi_heads.mask_predictor = MaskRCNNPredictor(
+            in_features_mask, hidden_layer, num_classes
+        )
+
+        train_dataset = MaskBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_clip/"),
+            img_ids=130,
+            transform=get_transform(train=True),
+        )
+        val_dataset = MaskBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_clip_test/"),
+            img_ids=18,
+            transform=get_transform(train=False),
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=data.batch_size,
+            shuffle=True,
+            num_workers=data.num_workers,
+            collate_fn=collate_fn,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=data.batch_size,
+            shuffle=False,
+            num_workers=data.num_workers,
+            collate_fn=collate_fn,
+        )
 
         trainer = Trainer(cfg, model, train_loader, val_loader)
+        trainer.train()
+    elif model.name == "Yolo":
+        input_shape = [128, 128]
+        phi = "l"
+        # anchors_mask = [[6, 7, 8], [3, 4, 5], [0, 1, 2]]
+        #
+        anchors_mask = [[2], [1], [0]]
+        num_classes = 1
+        model = YoloBody(anchors_mask=anchors_mask, num_classes=num_classes, phi=phi)
+        # anchors = [
+        #    [10, 13, 16, 30, 33, 23],
+        #    [30, 61, 62, 45, 59, 119],
+        #    [116, 90, 156, 198, 373, 326],
+        # ]
+        anchors = [[4.5594, 4.9717], [5.5252, 4.8209], [6.0084, 6.0117]]
+        anchors = np.array(anchors).reshape(-1, 2)
+        yolo_loss = YOLOLoss(anchors, num_classes, input_shape, anchors_mask, 0)
+
+        train_dataset = MaskBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_clip/"),
+            img_ids=130,
+            transform=get_transform(train=True),
+        )
+        val_dataset = MaskBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_clip_test/"),
+            img_ids=18,
+            transform=get_transform(train=False),
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=data.batch_size,
+            shuffle=True,
+            num_workers=data.num_workers,
+            collate_fn=collate_fn,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=data.batch_size,
+            shuffle=False,
+            num_workers=data.num_workers,
+            collate_fn=collate_fn,
+        )
+
+        trainer = Trainer(cfg, model, train_loader, val_loader)
+        trainer.criterion = yolo_loss
+        trainer.bbox_util = bbox.DecodeBox(
+            anchors, num_classes, input_shape, anchors_mask
+        )
         trainer.train()
 
 

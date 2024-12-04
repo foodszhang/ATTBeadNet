@@ -8,6 +8,7 @@ import numpy as np
 from typing import Tuple
 import os
 from skimage import measure
+import cv2
 
 
 def seed_detection(label):
@@ -147,26 +148,51 @@ class MaskRcnnDatasetFromSubset(Dataset):
         return img, targets, label
 
 
-class TestMaskRcnnDatasetFromSubset(Dataset):
+class MaskBeadDataset(Dataset):
     """Bead data set for bead detection"""
 
-    def __init__(self, subset, transform=None, device="cuda", radius=2):
-        self.subset = subset
+    def __init__(
+        self,
+        root_dir,
+        img_ids,
+        transform=lambda x: x,
+        device="cuda",
+        radius=3,
+    ):
+        """
+
+        :param root_dir: Path to the dataset containing a train, val and test directory.
+            :type root_dir: pathlib.PosixPath or pathlib.WindowsPath
+        :param mode: Use training, validation or test data set
+            :type mode: str
+        :param apply_dilation: Use dilated seeds or not.
+            :type apply_dilation: bool
+        :param transform: Transforms/augmentations to apply
+            :type torchvision.transforms.Compose
+        """
+
+        self.root_dir = root_dir
         self.transform = transform
-        self.device = device
+        self.img_ids = img_ids
         self.radius = radius
+        self.device = device
 
     def __len__(self):
-        return len(self.subset)
+        return self.img_ids
 
-    def __getitem__(self, index):
-        sample = self.subset[index]
-        if self.transform:
-            sample = self.transform(sample)
-        img, label, _ = sample
-        label = label[0]
-        bead, bead_seeds, num_beads = seed_detection(label)
-        pos = np.argwhere(bead_seeds[:, :, 0] > 0.5)
+    def __getitem__(self, idx):
+
+        filename = os.path.join(self.root_dir, str(idx) + ".tif")
+        labelname = os.path.join(self.root_dir, str(idx) + "_label.tif")
+
+        img = ski.io.imread(filename)
+        label = ski.io.imread(labelname)
+        img = ski.color.gray2rgb(img)
+        img = img / 4095
+
+        label = (label > 0).astype(np.uint8)
+        pos = np.argwhere(label > 0.5)
+        # pos = np.argwhere(bead_seeds[:, :, 0] > 0.5)
         radius = self.radius
         targets = []
         boxes = []
@@ -183,27 +209,17 @@ class TestMaskRcnnDatasetFromSubset(Dataset):
             if y2 > label.shape[1]:
                 y2 = label.shape[1]
             mask = np.zeros_like(label)
-            rr, cc = ski.draw.disk(p, radius, shape=label.shape)
+            rr, cc = ski.draw.disk(p, self.radius, shape=label.shape)
+
             mask[rr, cc] = 1
             boxes.append((x1, y1, x2, y2))
-            labels.append(1)
             masks.append(mask)
-        targets = [
-            {
-                "boxes": torch.as_tensor(boxes, dtype=torch.float32).to(self.device),
-                "labels": torch.as_tensor(labels).to(self.device),
-                "masks": torch.as_tensor(masks).to(self.device),
-            }
-        ]
-
-        # img = torch.from_numpy(img).float().to(self.device)
-        # masks = torch.as_tensor(masks, dtype=torch.uint8).to(self.device)
-        # normlize img to [0, 1]
-        # img = (img - img.min()) / (img.max() - img.min())
-        # targets = torch.as_tensor(targets)
-        # sample = {"image": img, "label": label, "id": idx}
-        # return img, {"boxes": boxes, "labels": mask_labels, "masks": masks}
-        img = img.to(self.device)
-        img = img.reshape(1, *img.shape)
-        label = label.to(self.device)
-        return img, targets, label
+        labels = torch.ones((len(pos),), dtype=torch.int64)
+        target = {
+            "labels": torch.as_tensor(labels),
+            "boxes": torch.as_tensor(boxes, dtype=torch.float32),
+            "masks": torch.as_tensor(masks),
+        }
+        img = img.astype(np.float32)
+        img, target = self.transform(img, target)
+        return img, target

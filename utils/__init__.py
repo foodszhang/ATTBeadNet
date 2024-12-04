@@ -107,6 +107,50 @@ def zero_pad_model_input(img_upsampled):
     return img_upsampled, pads, 0
 
 
+def get_center(mask):
+    mask = mask > 0.1
+    seeds = measure.label(mask, connectivity=1, background=0)
+    props_seeds = measure.regionprops(seeds)
+    max_area = 6
+    centroid = None
+    for i in range(len(props_seeds)):
+        prop = props_seeds[i]
+        if prop.area > max_area:
+            max_area = prop.area
+            centroid = np.round(prop.centroid).astype(np.uint16)
+    return centroid
+
+
+def cal_maskrcnn_score(label_masks, predict_masks):
+    predict_poses = [get_center(mask[0]) for mask in predict_masks]
+    predict_poses = [pose for pose in predict_poses if pose is not None]
+    label_poses = [get_center(mask) for mask in label_masks]
+
+    back = np.zeros((128, 128, 3))
+    ori_back = np.zeros((128, 128, 3))
+    predict_base = np.zeros((128, 128))
+    if len(predict_poses) == 0:
+        return 0, len(label_poses), 0
+    for pose in predict_poses:
+        rr, cc = ski.draw.disk(pose, 3, shape=back.shape)
+        back[rr, cc] = [255, 0, 0]
+        predict_base[rr, cc] = 1
+    _, pred_beed_seed, _ = seed_detection(predict_base)
+    predict_poses = np.argwhere(pred_beed_seed > 0)
+    for pose in label_poses:
+        rr, cc = ski.draw.circle_perimeter(*pose, 3, shape=ori_back.shape)
+        ori_back[rr, cc] = [255, 0, 0]
+    predict_poses = np.array(predict_poses)
+    label_poses = np.array(label_poses)
+    cost_matrix = sci.spatial.distance.cdist(label_poses, predict_poses, "euclidean")
+    row, col = sci.optimize.linear_sum_assignment(cost_matrix)
+    TP = 0
+    for x, y in zip(row, col):
+        if cost_matrix[x, y] < 4:
+            TP += 1
+    return TP, len(label_poses), len(predict_poses)
+
+
 def cal_score_origin(label, pred):
     _, label_beed_seed, _ = seed_detection(label)
     _, pred_beed_seed, _ = seed_detection(pred)
