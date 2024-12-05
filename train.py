@@ -27,7 +27,6 @@ from datasets import MaskBeadDataset, OriginBeadDataset, DatasetFromSubset
 from utils import cal_score_origin, cal_maskrcnn_score
 from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
-    MaskRCNN_ResNet50_FPN_Weights,
 )
 from torchvision.models.segmentation import fcn_resnet50
 from model.yolo import YoloBody
@@ -231,6 +230,9 @@ class Trainer:
                     # outputs = self.bbox_utils.decode_box(outputs)
                 if self.cfg_all.model.name == "resnet":
                     imgs, masks = batch[0].to(device), batch[1].to(device)
+                    imgs = torch.stack(
+                        [imgs[:, 0, :, :], imgs[:, 0, :, :], imgs[:, 0, :, :]], dim=1
+                    ).to(device)
                     preds = model(imgs)["out"]
                     loss = self.criterion(preds, masks)
 
@@ -523,7 +525,10 @@ class Trainer:
                     images = images.to(device)
                     # labels = labels.to(device, dtype=torch.long)
                     labels = labels.to(device)
-                    images = torch.stack([images[:, 0, :, :],[images[:, 0, :, :],[images[:, 0, :, :]], dim=1).to(device)
+                    images = torch.stack(
+                        [images[:, 0, :, :], images[:, 0, :, :], images[:, 0, :, :]],
+                        dim=1,
+                    ).to(device)
 
                     outputs = self.model(images)["out"]
                     predictions = torch.sigmoid(outputs)
