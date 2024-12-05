@@ -523,6 +523,7 @@ class Trainer:
                     images = images.to(device)
                     # labels = labels.to(device, dtype=torch.long)
                     labels = labels.to(device)
+                    images = torch.stack([images[:, 0, :, :],[images[:, 0, :, :],[images[:, 0, :, :]], dim=1).to(device)
 
                     outputs = self.model(images)["out"]
                     predictions = torch.sigmoid(outputs)
