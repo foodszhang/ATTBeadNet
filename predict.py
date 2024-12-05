@@ -161,6 +161,29 @@ def main(args):
                 pure_img.astype(np.uint8),
             )
             ski.io.imsave(f'{result_dir}{imgname.split(".")[0]}_mask.tif', bead_seeds)
+        elif cfg.model.name == "resnet":
+            img = ski.io.imread(os.path.join(data_dir, imgname))
+            img = ski.color.gray2rgb(img)
+            img, pads, status = utils.zero_pad_model_input(img_upsampled=img)
+            net_input = min_max_normalization(img=img, min_value=0, max_value=4095)
+            net_input = np.transpose(np.expand_dims(net_input, axis=0), [0, 3, 1, 2])
+            net_input = torch.from_numpy(net_input)
+            outputs = model(net_input)
+            target = outputs
+            prediction = torch.sigmoid(target)
+            p = prediction[0][0]
+            p = p.detach().cpu().numpy()
+            _, bead_seeds, num_beads = seed_detection(prediction)
+            bead_seeds = bead_seeds[pads[0] :, pads[1] :, :]
+            pos = np.argwhere(bead_seeds[:, :, 0] > 0.5)
+
+            for p in pos:
+                rr, cc = ski.draw.circle_perimeter(*p, 2, shape=pure_img.shape)
+                pure_img[rr, cc] = [255, 0, 0]
+            ski.io.imsave(
+                f'{result_dir}{imgname.split(".")[0]}.png', pure_img.astype(np.uint8)
+            )
+            ski.io.imsave(f'{result_dir}{imgname.split(".")[0]}_mask.tif', bead_seeds)
     print("123123123", sum)
 
 

@@ -28,7 +28,7 @@ from utils import cal_score_origin, cal_maskrcnn_score
 from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
 )
-from torchvision.models.segmentation import fcn_resnet50
+from torchvision.models.segmentation import fcn_resnet101
 from model.yolo import YoloBody
 from model.yolo_training import YOLOLoss
 import utils.transforms as T
@@ -736,7 +736,7 @@ def main(args):
         )
         trainer.train()
     elif model.name == "resnet":
-        model = fcn_resnet50(num_classes=1)
+        model = fcn_resnet101(num_classes=1)
         data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
         dataset = OriginBeadDataset(
             root_dir=Path("./data/20240911_60X_flat_multi"), img_ids=130
