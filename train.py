@@ -29,7 +29,7 @@ from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
     MaskRCNN_ResNet50_FPN_Weights,
 )
-from torchvision.models import resnet18
+from torchvision.models.segmentation import fcn_resnet50
 from model.yolo import YoloBody
 from model.yolo_training import YOLOLoss
 import utils.transforms as T
@@ -175,13 +175,11 @@ class Trainer:
             + f"{self.epoch + 1}/{self.cfg.epochs}",
         )  # progress bar
         for i, batch in pbar:
-            # self.warmup()
-            # imgs, masks = batch[0].to(device), batch[1].to(device, dtype=torch.long)
-            # imgs, masks = batch[0].to(device), batch[1].to(device)
+            self.warmup()
             self.global_iter += batch_size
             with amp.autocast():
                 if self.cfg_all.model.name == "Unet3":
-                    imgs, masks = batch
+                    imgs, masks = batch[0].to(device), batch[1].to(device)
                     preds = model(imgs)["final_pred"]
                     loss = self.criterion(preds, masks)
                 elif self.cfg_all.model.name == "MaskRCNN":
@@ -231,10 +229,9 @@ class Trainer:
                     loss = self.criterion(outputs, labels, imgs)
                     loss = loss[0]
                     # outputs = self.bbox_utils.decode_box(outputs)
-                if self.cfg_all.model.name == "Unet3":
-                    imgs, masks = batch
-                    preds = model(imgs)
-                    print("123123", preds)
+                if self.cfg_all.model.name == "resnet":
+                    imgs, masks = batch[0].to(device), batch[1].to(device)
+                    preds = model(imgs)["out"]
                     loss = self.criterion(preds, masks)
 
             self.update_loss_dict(self.loss_dict, {"loss": loss})
@@ -485,7 +482,6 @@ class Trainer:
                         conf_thres=confidence,
                         nms_thres=0.01,
                     )
-                    print("123123123", results)
                     for j, result in enumerate(results):
                         if result is None:
                             continue
@@ -521,6 +517,67 @@ class Trainer:
                 self.val_dict["per_time"] = 0
                 self.val_dict["label_sum"] = label_sum
                 self.val_dict["pred_sum"] = pred_sum
+            elif self.cfg_all.model.name == "resnet":
+                for i, batch in pbar:
+                    images, labels, _ = batch
+                    images = images.to(device)
+                    # labels = labels.to(device, dtype=torch.long)
+                    labels = labels.to(device)
+
+                    outputs = self.model(images)["out"]
+                    predictions = torch.sigmoid(outputs)
+                    preds = predictions.detach().cpu().numpy()
+                    targets = labels.cpu().numpy()
+                    targets = targets[:, 0, :, :]
+                    preds = preds[:, 0, :, :]
+                    for pred, target in zip(preds, targets):
+                        tp, label, p = cal_score_origin(target, pred)
+                        TP += tp
+                        label_sum += label
+                        pred_sum += p
+                    # self.metrics.update(targets, preds)
+                    loss = self.criterion(outputs, labels)
+                    LOSS += loss
+                LOSS /= len(self.val_loader)
+                if pred_sum != 0:
+                    P = TP / pred_sum
+                else:
+                    P = 0
+                R = TP / label_sum
+                if P + R == 0:
+                    f1 = 0
+                else:
+                    f1 = 2 * P * R / (P + R)
+                acc = R
+
+                self.update_loss_dict(self.val_loss_dict, {"loss": LOSS})
+                self.update_loss_dict(self.val_f1_dict, {"f1": f1})
+                self.val_results = pd.concat(
+                    [
+                        self.val_results,
+                        pd.DataFrame(
+                            {
+                                "epoch": self.epoch,
+                                "loss": LOSS.detach().cpu().numpy(),
+                                "f1": f1,
+                                "acc": acc,
+                            },
+                            index=[self.epoch],
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+                self.val_dict["f1"] = f1
+                self.val_dict["P"] = P
+                self.val_dict["R"] = R
+                # self.val_dict["per_time"] = (time.time() - start_time) / total_sum
+                self.val_dict["per_time"] = 0
+                self.val_dict["label_sum"] = label_sum
+                self.val_dict["pred_sum"] = pred_sum
+
+                score = self.metrics.get_results()
+                pbar.close()
+                return score
 
 
 def main(args):
@@ -673,12 +730,12 @@ def main(args):
         )
         trainer.train()
     elif model.name == "resnet":
-        model = resnet18()
-        model.fc = torch.nn.Linear(512, 2)
-
+        model = fcn_resnet50(num_classes=1)
         data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
-        dataset = OriginBeadDataset(root_dir=Path("./data/"), img_ids=1000)
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [800, 200])
+        dataset = OriginBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_multi"), img_ids=130
+        )
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [110, 21])
         train_dataset = DatasetFromSubset(
             train_dataset, transform=data_transforms["train"]
         )

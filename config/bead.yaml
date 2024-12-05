@@ -4,7 +4,8 @@ model:
   encoder: default
   use_cgm: True
   #name: Unet3
-  name: Yolo
+  #name: Yolo
+  name: resnet
   #name: MaskRCNN
 
 data:
