@@ -29,6 +29,7 @@ from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
     MaskRCNN_ResNet50_FPN_Weights,
 )
+from torchvision.models import resnet18
 from model.yolo import YoloBody
 from model.yolo_training import YOLOLoss
 import utils.transforms as T
@@ -230,6 +231,11 @@ class Trainer:
                     loss = self.criterion(outputs, labels, imgs)
                     loss = loss[0]
                     # outputs = self.bbox_utils.decode_box(outputs)
+                if self.cfg_all.model.name == "Unet3":
+                    imgs, masks = batch
+                    preds = model(imgs)
+                    print("123123", preds)
+                    loss = self.criterion(preds, masks)
 
             self.update_loss_dict(self.loss_dict, {"loss": loss})
             self.scaler.scale(loss).backward()
@@ -665,6 +671,33 @@ def main(args):
         trainer.bbox_util = bbox.DecodeBox(
             anchors, num_classes, input_shape, anchors_mask
         )
+        trainer.train()
+    elif model.name == "resnet":
+        model = resnet18()
+        model.fc = torch.nn.Linear(512, 2)
+
+        data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
+        dataset = OriginBeadDataset(root_dir=Path("./data/"), img_ids=1000)
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [800, 200])
+        train_dataset = DatasetFromSubset(
+            train_dataset, transform=data_transforms["train"]
+        )
+        val_dataset = DatasetFromSubset(val_dataset, transform=data_transforms["val"])
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=data.batch_size,
+            shuffle=True,
+            num_workers=data.num_workers,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=data.batch_size,
+            shuffle=False,
+            num_workers=data.num_workers,
+        )
+
+        trainer = Trainer(cfg, model, train_loader, val_loader)
         trainer.train()
 
 
