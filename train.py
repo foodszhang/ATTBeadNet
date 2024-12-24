@@ -27,6 +27,7 @@ from datasets import MaskBeadDataset, OriginBeadDataset, DatasetFromSubset
 from utils import cal_score_origin, cal_maskrcnn_score
 from torchvision.models.detection import (
     maskrcnn_resnet50_fpn,
+    MaskRCNN,
 )
 from torchvision.models.segmentation import fcn_resnet101
 from model.yolo import YoloBody
@@ -184,13 +185,14 @@ class Trainer:
                 elif self.cfg_all.model.name == "MaskRCNN":
 
                     imgs, targets = batch
-                    imgs = list(image.to(device) for image in imgs)
+                    imgs = list(image.to(device) for image in imgs if image is not None)
                     targets = [
                         {
                             k: v.to(device) if isinstance(v, torch.Tensor) else v
                             for k, v in t.items()
                         }
                         for t in targets
+                        if t is not None
                     ]
                     loss_dict = model(imgs, targets)
                     loss = sum(loss for loss in loss_dict.values())
@@ -417,6 +419,13 @@ class Trainer:
                     ignore_index=True,
                 )
                 self.val_results.to_csv("val_results.csv")
+                self.update_loss_dict(self.val_f1_dict, {"f1": f1})
+                self.val_dict["f1"] = f1
+                self.val_dict["P"] = P
+                self.val_dict["R"] = R
+                self.val_dict["per_time"] = 0
+                self.val_dict["label_sum"] = label_sum
+                self.val_dict["pred_sum"] = pred_sum
 
                 score = self.metrics.get_results()
                 pbar.close()
@@ -624,8 +633,10 @@ def main(args):
             am="CBAM",
         )
         data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
-        dataset = OriginBeadDataset(root_dir=Path("./data/"), img_ids=1000)
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [800, 200])
+        dataset = OriginBeadDataset(
+            root_dir=Path("./data/20240911_60X_flat_multi/"), img_ids=130
+        )
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [110, 21])
         train_dataset = DatasetFromSubset(
             train_dataset, transform=data_transforms["train"]
         )
@@ -649,26 +660,55 @@ def main(args):
     elif model.name == "MaskRCNN":
         from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
         from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
+        from torchvision.models import vgg16_bn
+        import torchvision
+        from torchvision.models.detection.rpn import AnchorGenerator
 
-        model = maskrcnn_resnet50_fpn()
-        in_features = model.roi_heads.box_predictor.cls_score.in_features
-        in_features_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
-        num_classes = 2
-        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-        hidden_layer = 256
-        model.roi_heads.mask_predictor = MaskRCNNPredictor(
-            in_features_mask, hidden_layer, num_classes
+        # model = maskrcnn_resnet50_fpn()
+        backbone = torchvision.models.mobilenet_v2(pretrained=False).features
+        # backbone = torchvision.models.resnet50(pretrained=False).features
+        # backbone = torchvision.models.vgg16_bn(pretrained=False).features
+        anchor_generator = AnchorGenerator(
+            sizes=((8, 16, 32),),
+            aspect_ratios=(
+                (
+                    0.5,
+                    1.0,
+                    1.5,
+                )
+            ),
         )
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+            featmap_names=["0"], output_size=7, sampling_ratio=2
+        )
+        backbone.out_channels = 1280
+        model = MaskRCNN(
+            backbone,
+            num_classes=2,
+            rpn_anchor_generator=anchor_generator,
+            box_roi_pool=roi_pooler,
+        )
+
+        # in_features = model.roi_heads.box_predictor.cls_score.in_features
+        # in_features_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
+        # num_classes = 2
+        # model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        # hidden_layer = 256
+        # model.roi_heads.mask_predictor = MaskRCNNPredictor(
+        #    in_features_mask, hidden_layer, num_classes
+        # )
 
         train_dataset = MaskBeadDataset(
-            root_dir=Path("./data/20240911_60X_flat_clip/"),
-            img_ids=130,
+            root_dir=Path("./data/20240911_20X_flat_clip/"),
+            img_ids=70,
             transform=get_transform(train=True),
+            radius=2,
         )
         val_dataset = MaskBeadDataset(
-            root_dir=Path("./data/20240911_60X_flat_clip_test/"),
-            img_ids=18,
+            root_dir=Path("./data/20240911_20X_flat_clip_test/"),
+            img_ids=6,
             transform=get_transform(train=False),
+            radius=2,
         )
         train_loader = DataLoader(
             train_dataset,
@@ -736,12 +776,12 @@ def main(args):
         )
         trainer.train()
     elif model.name == "resnet":
-        model = fcn_resnet101(num_classes=1)
+        model = fcn_resnet101(num_classes=1, pretrain=False)
         data_transforms = augmentors(augmentation="train", min_value=0, max_value=4095)
         dataset = OriginBeadDataset(
-            root_dir=Path("./data/20240911_60X_flat_multi"), img_ids=130
+            root_dir=Path("./data/20240911_40X_flat_multi"), img_ids=92
         )
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [110, 21])
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [83, 10])
         train_dataset = DatasetFromSubset(
             train_dataset, transform=data_transforms["train"]
         )

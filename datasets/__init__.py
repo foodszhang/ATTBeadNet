@@ -221,5 +221,7 @@ class MaskBeadDataset(Dataset):
             "masks": torch.as_tensor(masks),
         }
         img = img.astype(np.float32)
+        if target["masks"].shape[0] == 0:
+            return None, None
         img, target = self.transform(img, target)
         return img, target
