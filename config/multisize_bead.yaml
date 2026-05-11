@@ -1,25 +1,45 @@
-# Default config for multisize bead tile preprocessing
-# Override via command-line arguments in preprocess_multisize_tiles.py
+# Multisize K-class bead detection training config
 
 global_seed: 42
 
 data:
-  raw_root: "datasets/20260511"
-  image_dir: "RF"
-  class_dirs: ["1.0_mask", "2.8_mask"]
+  train_root: "datasets/processed/20260511_tiles_64"
+  test_root: ""
+  num_classes: 2
   class_names: ["1.0", "2.8"]
-  mask_suffix: "_Mask.tif"
-  image_suffix: ".tif"
-  processed_root: "datasets/processed/20260511_tiles_64"
+  input_channels: 1
   tile_size: 64
   stride: 32
-  split_mode: "all_train"      # "all_train" | "train_val_by_image" | "fixed_test"
-  val_ratio: 0.15
-  negative_ratio: 1.0
-  mask_center_mode: "pixel"    # "pixel" only for now
-  allow_missing_mask: false
+  batch_size: 32
+  num_workers: 4
 
-augment:
-  offline: false
-  multiplier: 4
-  photometric: false
+model:
+  name: "Unet3"
+  encoder: "default"
+  skip_ch: 64
+  aux_losses: 0
+  use_cgm: false
+  dropout: 0.3
+  pretrained: false
+
+train:
+  seed: 42
+  epochs: 50
+  lr: 0.001
+  optimizer: "adamw"
+  weight_decay: 0.0001
+  val_interval: 1
+  device: "cuda"
+  loss_type: "focal_dice"
+  class_weights: null
+  focal_gamma: 2.0
+  dice_weight: 1.0
+  focal_weight: 1.0
+  count_loss_weight: 0.0
+  save_name: "multisize_kclass"
+  log_dir: "./runs/multisize"
+
+postprocess:
+  thresholds: [0.5, 0.5]
+  min_distances: [3, 5]
+  match_radius: 3

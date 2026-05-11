@@ -48,6 +48,13 @@ cfg.train.aux_weight = 0.4
 cfg.train.loss_type = "focal"
 cfg.train.save_name = "UNet3Plus"
 
+# New multisize training params
+cfg.train.class_weights = None
+cfg.train.focal_gamma = 2.0
+cfg.train.dice_weight = 1.0
+cfg.train.focal_weight = 1.0
+cfg.train.count_loss_weight = 0.0
+
 # LOGGING
 cfg.train.logger = CN()
 cfg.train.logger.log_dir = "./runs"
@@ -61,3 +68,9 @@ cfg.train.logger.use_wandb = False
 cfg.train.logger.wandb = CN()
 cfg.train.logger.wandb.project = "UNet3Plus"
 cfg.train.logger.wandb.run_id = ""
+
+# POSTPROCESS
+cfg.postprocess = CN()
+cfg.postprocess.thresholds = [0.5]
+cfg.postprocess.min_distances = [3]
+cfg.postprocess.match_radius = 3
