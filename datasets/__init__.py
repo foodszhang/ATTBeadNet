@@ -1,3 +1,4 @@
+from .multisize_dataset import MultiSizeBeadTileDataset, MultiSizeTileManifest
 import torch
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image
