@@ -179,7 +179,7 @@ class UNet3Plus(nn.Module):
                     nn.Conv2d(channels[-1], 2, 1),
                     nn.AdaptiveMaxPool2d(1),
                     nn.Sigmoid()
-                ) if use_cgm and num_classes <= 2 else None
+                ) if use_cgm and num_classes == 1 else None
         
         if transpose_final:
             self.head = nn.Sequential(
@@ -214,6 +214,8 @@ class UNet3Plus(nn.Module):
                         if self.cls is not None:
                             pred['cls'] = self.cls(de).squeeze_()
                             have_obj = torch.argmax(pred['cls'])
+                        else:
+                            have_obj = 1
                     head_key = f'aux_head{ii}'
                     if head_key in self.aux_head:
                         de: torch.Tensor = de * have_obj
