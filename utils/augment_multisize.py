@@ -85,21 +85,23 @@ def seeded_augment_ids(tile_id, n, global_seed=42, exclude_id=0):
     Yields:
         int augmentation IDs in range [0, 7], excluding identity
     """
-    # Available IDs are 1-7 (exclude 0)
-    available_ids = [i for i in range(8) if i != exclude_id]
+    # Non-identity IDs: [1, 2, 3, 4, 5, 6, 7]
+    non_identity_ids = [i for i in range(len(D4_TRANSFORMS)) if i != exclude_id]
 
-    for aug_idx in range(n):
-        # Derive seed from inputs
-        seed = hash((global_seed, tile_id, aug_idx)) % 2**31
-        rng = np.random.RandomState(seed)
+    for i in range(n):
+        # Derive a fresh seed for each augmentation index
+        # seed must differ for each tile_id AND each aug index
+        seed = hash((global_seed, tile_id, i)) % (2**31)
+        rng = np.random.default_rng(seed)
 
-        if n > 7:
-            # Cycle through with different seeds per aug_idx
-            sample_id = available_ids[aug_idx % len(available_ids)]
+        if i < len(non_identity_ids):
+            # Sample without replacement from the 7 non-identity transforms
+            # Use permutation to get a fresh ordering per tile_id
+            perm_seed = hash((global_seed, tile_id)) % (2**31)
+            perm_rng = np.random.default_rng(perm_seed)
+            perm = perm_rng.permutation(len(non_identity_ids))
+            results = [non_identity_ids[perm[j]] for j in range(len(non_identity_ids))]
+            yield results[i]
         else:
-            # Sample without replacement: shuffle once, then pick sequentially
-            if aug_idx == 0:
-                rng.shuffle(available_ids)
-            sample_id = available_ids[aug_idx]
-
-        yield sample_id
+            # For n > 7, cycle with different seed per index
+            yield rng.integers(0, len(D4_TRANSFORMS))
