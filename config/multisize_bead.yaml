@@ -12,6 +12,12 @@ data:
   stride: 32
   batch_size: 8
   num_workers: 0
+  sampler: "class_balanced"
+  sampler_weights:
+    negative: 0.5
+    class_0_only: 1.5
+    class_1_only: 5.0
+    mixed: 4.0
 
 model:
   name: "Unet3"

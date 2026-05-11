@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from config.config import cfg
@@ -28,6 +28,60 @@ from utils.metrics import (
 def one_cycle(y1=0.0, y2=1.0, steps=100):
     """One-cycle learning rate scheduler function."""
     return lambda x: ((1 - math.cos(x * math.pi / steps)) / 2) * (y2 - y1) + y1
+
+
+def build_class_balanced_sampler(dataset, cfg):
+    """Build a WeightedRandomSampler that oversamples tiles with rare classes."""
+    df = dataset.df
+    weights = []
+    stats = {"negative": 0, "class_0_only": 0, "class_1_only": 0, "mixed": 0}
+
+    for _, row in df.iterrows():
+        counts = []
+        for k in range(dataset.num_classes):
+            counts.append(row.get(f"count_class_{k}", 0))
+
+        total = sum(counts)
+
+        if total == 0:
+            w = cfg.data.sampler_weights.negative
+            stats["negative"] += 1
+        else:
+            active_classes = [k for k, c in enumerate(counts) if c > 0]
+
+            if dataset.num_classes == 2:
+                c0, c1 = counts[0], counts[1]
+
+                if c0 > 0 and c1 > 0:
+                    w = cfg.data.sampler_weights.mixed
+                    stats["mixed"] += 1
+                elif c1 > 0:
+                    w = cfg.data.sampler_weights.class_1_only
+                    stats["class_1_only"] += 1
+                elif c0 > 0:
+                    w = cfg.data.sampler_weights.class_0_only
+                    stats["class_0_only"] += 1
+                else:
+                    w = cfg.data.sampler_weights.negative
+                    stats["negative"] += 1
+            else:
+                # K-class fallback: if any class > 0 is not class 0, give higher weight
+                if any(k > 0 for k in active_classes):
+                    w = cfg.data.sampler_weights.class_1_only
+                    stats["class_1_only"] += 1
+                else:
+                    w = cfg.data.sampler_weights.class_0_only
+                    stats["class_0_only"] += 1
+
+        weights.append(float(w))
+
+    sampler = WeightedRandomSampler(
+        weights=torch.DoubleTensor(weights),
+        num_samples=len(weights),
+        replacement=True,
+    )
+
+    return sampler, stats
 
 
 class Trainer:
@@ -248,12 +302,34 @@ def main(args):
         radius_per_class=cfg.target.radius_per_class,
     )
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.data.batch_size,
-        shuffle=True,
-        num_workers=cfg.data.num_workers,
-    )
+    num_train = len(train_ds)
+    print(f"num train tiles: {num_train}")
+
+    if cfg.data.sampler == "class_balanced":
+        sampler, stats = build_class_balanced_sampler(train_ds, cfg)
+        print(f"num negative tiles: {stats['negative']}")
+        print(f"num class_0_only tiles: {stats['class_0_only']}")
+        print(f"num class_1_only tiles: {stats['class_1_only']}")
+        print(f"num mixed tiles: {stats['mixed']}")
+        print(f"sampler mode: class_balanced")
+        print(f"weights: negative={cfg.data.sampler_weights.negative}, "
+              f"class_0_only={cfg.data.sampler_weights.class_0_only}, "
+              f"class_1_only={cfg.data.sampler_weights.class_1_only}, "
+              f"mixed={cfg.data.sampler_weights.mixed}")
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=cfg.data.batch_size,
+            sampler=sampler,
+            shuffle=False,
+            num_workers=cfg.data.num_workers,
+        )
+    else:
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=cfg.data.batch_size,
+            shuffle=True,
+            num_workers=cfg.data.num_workers,
+        )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.data.batch_size,

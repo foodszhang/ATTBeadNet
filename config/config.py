@@ -26,6 +26,12 @@ cfg.data.tile_size = 64
 cfg.data.stride = 32
 cfg.data.batch_size = 32
 cfg.data.num_workers = 4
+cfg.data.sampler = "shuffle"  # "shuffle" or "class_balanced"
+cfg.data.sampler_weights = CN()
+cfg.data.sampler_weights.negative = 0.5
+cfg.data.sampler_weights.class_0_only = 1.5
+cfg.data.sampler_weights.class_1_only = 5.0
+cfg.data.sampler_weights.mixed = 4.0
 
 # HYPERPARAMETERS
 cfg.train = CN()
