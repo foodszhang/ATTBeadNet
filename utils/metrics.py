@@ -18,7 +18,10 @@ def extract_gt_centers_from_mask(mask: np.ndarray, mode: str = "pixel") -> list:
     K = mask.shape[0]
 
     for k in range(K):
-        binary = (mask[k] > 0).astype(np.uint8)
+        mask_k = mask[k]
+        if isinstance(mask_k, torch.Tensor):
+            mask_k = mask_k.cpu().numpy()
+        binary = (mask_k > 0).astype(np.uint8)
 
         if mode == "pixel":
             ys, xs = np.nonzero(binary)
