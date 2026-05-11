@@ -24,7 +24,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import tifffile
-import yaml
 
 # ---------------------------------------------------------------------------
 # Project root setup
@@ -207,6 +206,8 @@ def parse_args():
                         help="Global random seed (default: 42)")
     parser.add_argument("--allow-missing-mask", action="store_true",
                         help="Allow missing masks and skip those images")
+    parser.add_argument("--save-overlay-limit", type=int, default=16,
+                        help="Save debug overlay for first N tiles (default: 16)")
     return parser.parse_args()
 
 
@@ -230,7 +231,7 @@ def main():
         ]
 
     num_classes = len(args.class_dirs)
-    source_dataset = derive_source_dataset(args.out_dir)
+    source_dataset = os.path.basename(os.path.normpath(args.raw_root))
 
     print(f"[preprocess_multisize_tiles] raw_root={args.raw_root}")
     print(f"[preprocess_multisize_tiles] out_dir={args.out_dir}")
@@ -264,9 +265,9 @@ def main():
     # Assign splits to image IDs
     image_to_split = {}
     for tid in train_ids:
-        image_to_split[tid] = "train"
+        image_to_split[tid] = "train_pool"
     for vid in val_ids:
-        image_to_split[vid] = "val"
+        image_to_split[vid] = "internal_val"
 
     print(f"  train images: {len(train_ids)}, val images: {len(val_ids)}")
 
@@ -316,9 +317,9 @@ def main():
             # Filter by split (only process tiles from images in our target split)
             # For train_pool: include all train images
             # For independent_test: include all images
-            if args.split == "train_pool" and tile_split not in ("train", "val"):
+            if args.split == "train_pool" and tile_split not in ("train_pool", "internal_val"):
                 continue
-            elif args.split == "independent_test" and tile_split != "val":
+            elif args.split == "independent_test" and tile_split != "internal_val":
                 # independent_test only uses val images
                 continue
 
@@ -350,7 +351,7 @@ def main():
         # Determine aug_ids to write
         if args.augment_offline and args.split == "train_pool":
             extra_aug_ids = list(seeded_augment_ids(
-                hashlib.md5(tile_id_base.encode()).hexdigest(),
+                tile_id_base,
                 n=args.augment_multiplier,
                 global_seed=args.global_seed,
                 exclude_id=0
@@ -448,7 +449,7 @@ def main():
         tile["mask_path"] = os.path.join(storage_split, "masks", f"{tile_id}_mask.npy")
 
         # Debug overlay (first 16 tiles only)
-        if debug_counter < 16:
+        if debug_counter < args.save_overlay_limit:
             try:
                 import cv2
                 overlay = make_overlay(tile["image"], tile["mask"], tile["class_names"])
