@@ -1,5 +1,6 @@
 
 from .u3ploss import build_u3p_loss
+from .multichannel_loss import MultiChannelFocalDiceLoss
 import torch
 import torch.nn as nn
 
@@ -27,6 +28,10 @@ def get_loss(loss_function):
     elif loss_function == 'dice':
 
         criterion = dice_loss
+
+    elif loss_function == 'focal_dice':
+
+        criterion = MultiChannelFocalDiceLoss()
 
     else:
 
