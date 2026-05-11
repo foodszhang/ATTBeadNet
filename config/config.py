@@ -17,7 +17,7 @@ cfg.model.name = "Unet3"
 
 # DATA
 cfg.data = CN()
-cfg.data.train_root = "datasets/processed/20260511_tiles_64"
+cfg.data.train_root = "datasets/processed/20260512_tiles_64"
 cfg.data.test_root = ""
 cfg.data.num_classes = 2
 cfg.data.class_names = ["1.0", "2.8"]
@@ -58,3 +58,9 @@ cfg.postprocess = CN()
 cfg.postprocess.thresholds = [0.5, 0.5]
 cfg.postprocess.min_distances = [3, 5]
 cfg.postprocess.match_radius = 3
+
+# TARGET
+cfg.target = CN()
+cfg.target.mode = "raw"  # "raw" or "disk"
+cfg.target.radius_per_class = [1, 3]
+cfg.target.keep_raw_center_mask = True

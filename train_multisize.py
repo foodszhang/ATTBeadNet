@@ -122,6 +122,8 @@ class Trainer:
                 images = batch["image"].float().to(self.cfg.device)
                 masks = batch["mask"].float().cpu().numpy()
                 counts = batch["count"].float().cpu().numpy()
+                # Use center_mask for GT extraction, not heatmap
+                center_masks = batch.get("center_mask", masks)
 
                 out = self.model(images)
                 logits = out["final_pred"] if isinstance(out, dict) else out
@@ -129,7 +131,7 @@ class Trainer:
 
                 B = images.shape[0]
                 for b in range(B):
-                    gt_centers = extract_gt_centers_from_mask(masks[b], mode="pixel")
+                    gt_centers = extract_gt_centers_from_mask(center_masks[b], mode="pixel")
                     pred_centers = extract_pred_centers_from_prob(
                         probs[b], thresholds, min_distances, use_peak_local_max=True
                     )

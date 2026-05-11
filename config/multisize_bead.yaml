@@ -3,7 +3,7 @@
 global_seed: 42
 
 data:
-  train_root: "datasets/processed/20260511_tiles_64"
+  train_root: "datasets/processed/20260512_tiles_64"
   test_root: ""
   num_classes: 2
   class_names: ["1.0", "2.8"]
@@ -43,3 +43,8 @@ postprocess:
   thresholds: [0.5, 0.5]
   min_distances: [3, 5]
   match_radius: 3
+
+target:
+  mode: "disk"
+  radius_per_class: [1, 3]
+  keep_raw_center_mask: true
