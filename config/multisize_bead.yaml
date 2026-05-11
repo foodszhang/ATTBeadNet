@@ -1,0 +1,25 @@
+# Default config for multisize bead tile preprocessing
+# Override via command-line arguments in preprocess_multisize_tiles.py
+
+global_seed: 42
+
+data:
+  raw_root: "datasets/20260511"
+  image_dir: "RF"
+  class_dirs: ["1.0_mask", "2.8_mask"]
+  class_names: ["1.0", "2.8"]
+  mask_suffix: "_Mask.tif"
+  image_suffix: ".tif"
+  processed_root: "datasets/processed/20260511_tiles_64"
+  tile_size: 64
+  stride: 32
+  split_mode: "all_train"      # "all_train" | "train_val_by_image" | "fixed_test"
+  val_ratio: 0.15
+  negative_ratio: 1.0
+  mask_center_mode: "pixel"    # "pixel" only for now
+  allow_missing_mask: false
+
+augment:
+  offline: false
+  multiplier: 4
+  photometric: false
