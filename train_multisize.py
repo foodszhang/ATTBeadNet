@@ -65,13 +65,26 @@ def build_class_balanced_sampler(dataset, cfg):
                     w = cfg.data.sampler_weights.negative
                     stats["negative"] += 1
             else:
-                # K-class fallback: if any class > 0 is not class 0, give higher weight
-                if any(k > 0 for k in active_classes):
-                    w = cfg.data.sampler_weights.class_1_only
-                    stats["class_1_only"] += 1
-                else:
+                # K-class fallback: weight based on rarity of class composition
+                active_set = set(active_classes)
+                # Give higher weight to tiles containing rarer classes (higher index)
+                max_class = max(active_set) if active_set else 0
+                if max_class == 0:
                     w = cfg.data.sampler_weights.class_0_only
                     stats["class_0_only"] += 1
+                elif len(active_set) == 1:
+                    # Single non-zero class
+                    if max_class == 1:
+                        w = cfg.data.sampler_weights.class_1_only
+                        stats["class_1_only"] += 1
+                    else:
+                        # Classes > 1 treated as rare (use class_1_only weight as proxy)
+                        w = cfg.data.sampler_weights.class_1_only
+                        stats["class_1_only"] += 1
+                else:
+                    # Multiple classes present
+                    w = cfg.data.sampler_weights.mixed
+                    stats["mixed"] += 1
 
         weights.append(float(w))
 
