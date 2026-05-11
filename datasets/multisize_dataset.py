@@ -69,18 +69,19 @@ class MultiSizeBeadTileDataset(Dataset):
             image = np.expand_dims(image, axis=0)  # [1, H, W]
         image = image.astype(np.float32)
 
-        # Load mask
+        # Load mask: stored as uint8 [0, 255] → normalize to [0.0, 1.0]
         mask_path = os.path.join(self.root_dir, row["mask_path"])
-        mask = np.load(mask_path)  # [K, H, W] uint8
+        mask = np.load(mask_path).astype(np.float32) / 255.0  # [K, H, W] float in [0, 1]
 
-        # Compute per-class counts
+        # Compute per-class counts (on original 0/1 mask)
+        mask_binary = (mask > 0.5)
         count = np.array(
-            [(mask[k] > 0).sum() for k in range(mask.shape[0])], dtype=np.int64
+            [mask_binary[k].sum() for k in range(mask.shape[0])], dtype=np.int64
         )
 
         sample = {
             "image": torch.from_numpy(image).float(),
-            "mask": torch.from_numpy(mask).byte(),
+            "mask": torch.from_numpy(mask).float(),
             "count": torch.from_numpy(count).long(),
             "tile_id": str(row["tile_id"]),
             "source_image_id": str(row["source_image_id"]),

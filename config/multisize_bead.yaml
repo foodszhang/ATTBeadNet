@@ -10,8 +10,8 @@ data:
   input_channels: 1
   tile_size: 64
   stride: 32
-  batch_size: 32
-  num_workers: 4
+  batch_size: 8
+  num_workers: 0
 
 model:
   name: "Unet3"

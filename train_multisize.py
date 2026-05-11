@@ -116,7 +116,8 @@ class Trainer:
                 masks = batch["mask"].float().to(self.cfg.device)
                 counts = batch["count"].float().to(self.cfg.device)
 
-                logits = self.model(images)["final_pred"]
+                out = self.model(images)
+                logits = out["final_pred"] if isinstance(out, dict) else out
                 probs = torch.sigmoid(logits)
 
                 for k in range(K):
