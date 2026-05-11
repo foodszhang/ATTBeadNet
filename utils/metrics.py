@@ -3,7 +3,128 @@
 import numpy as np
 import torch
 import tqdm
+from scipy.optimize import linear_sum_assignment
+from skimage.feature import peak_local_max
 # from sklearn.metrics import confusion_matrix
+
+
+def extract_gt_centers_from_mask(mask: np.ndarray, mode: str = "pixel") -> list:
+    """
+    Extract center coordinates from binary mask.
+    mode "pixel": each non-zero pixel is a center (for single-pixel annotations).
+    mode "cc": connected component centroid.
+    """
+    centers = []
+    K = mask.shape[0]
+
+    for k in range(K):
+        binary = (mask[k] > 0).astype(np.uint8)
+
+        if mode == "pixel":
+            ys, xs = np.nonzero(binary)
+            for y, x in zip(ys, xs):
+                centers.append({"class_id": k, "y": float(y), "x": float(x)})
+        elif mode == "cc":
+            from skimage import measure
+            labeled = measure.label(binary, connectivity=1)
+            props = measure.regionprops(labeled)
+            for prop in props:
+                y, x = prop.centroid
+                centers.append({"class_id": k, "y": float(y), "x": float(x)})
+
+    return centers
+
+
+def extract_pred_centers_from_prob(
+    probs: np.ndarray,
+    thresholds: list,
+    min_distances: list,
+    use_peak_local_max: bool = True
+) -> list:
+    """
+    Extract center coordinates from probability maps.
+    Uses peak_local_max when use_peak_local_max=True (respects min_distance).
+    Falls back to connected component centroid otherwise.
+    """
+    centers = []
+    K = probs.shape[0]
+
+    for k in range(K):
+        prob_k = probs[k]
+        thresh = thresholds[k] if k < len(thresholds) else 0.5
+        min_d = min_distances[k] if k < len(min_distances) else 3
+
+        if use_peak_local_max:
+            coords = peak_local_max(
+                prob_k,
+                min_distance=min_d,
+                threshold_abs=thresh,
+                exclude_border=False,
+            )
+            for y, x in coords:
+                centers.append({
+                    "class_id": k,
+                    "y": float(y),
+                    "x": float(x),
+                    "score": float(prob_k[y, x]),
+                })
+        else:
+            from skimage import measure
+            binary = prob_k > thresh
+            labeled = measure.label(binary, connectivity=2)
+            props = measure.regionprops(labeled, intensity_image=prob_k)
+            for prop in props:
+                centers.append({
+                    "class_id": k,
+                    "y": prop.centroid[0],
+                    "x": prop.centroid[1],
+                    "score": prop.mean_intensity,
+                })
+
+    return centers
+
+
+def compute_distance_matrix(pred_centers: list, gt_centers: list, match_radius: float) -> np.ndarray:
+    """Build cost matrix for Hungarian matching."""
+    if len(pred_centers) == 0 or len(gt_centers) == 0:
+        return np.full((len(pred_centers), len(gt_centers)), 1e9)
+
+    cost = np.full((len(pred_centers), len(gt_centers)), 1e9, dtype=np.float32)
+
+    for i, pred in enumerate(pred_centers):
+        for j, gt in enumerate(gt_centers):
+            if pred['class_id'] == gt['class_id']:
+                dist = np.sqrt((pred['x'] - gt['x'])**2 + (pred['y'] - gt['y'])**2)
+                cost[i, j] = dist
+
+    return cost
+
+
+def hungarian_match(pred_centers: list, gt_centers: list, match_radius: float) -> tuple:
+    """
+    Match predictions to GT using Hungarian algorithm within match_radius.
+    Returns: (matched, unmatched_pred, unmatched_gt)
+    """
+    cost = compute_distance_matrix(pred_centers, gt_centers, match_radius)
+
+    if len(pred_centers) == 0:
+        return [], [], list(range(len(gt_centers)))
+    if len(gt_centers) == 0:
+        return [], list(range(len(pred_centers))), []
+
+    row_indices, col_indices = linear_sum_assignment(cost)
+
+    matched = []
+    unmatched_pred = set(range(len(pred_centers)))
+    unmatched_gt = set(range(len(gt_centers)))
+
+    for r, c in zip(row_indices, col_indices):
+        if cost[r, c] <= match_radius:
+            matched.append((r, c))
+            unmatched_pred.discard(r)
+            unmatched_gt.discard(c)
+
+    return matched, list(unmatched_pred), list(unmatched_gt)
 
 class _StreamMetrics(object):
     def __init__(self):

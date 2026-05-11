@@ -18,6 +18,11 @@ from config.config import cfg
 from datasets import MultiSizeBeadTileDataset
 from model import build_unet3plus
 from utils.loss import get_loss
+from utils.metrics import (
+    extract_gt_centers_from_mask,
+    extract_pred_centers_from_prob,
+    hungarian_match,
+)
 
 
 def one_cycle(y1=0.0, y2=1.0, steps=100):
@@ -98,10 +103,12 @@ class Trainer:
         pbar.close()
 
     def validate(self):
-        """Compute per-class precision/recall/F1 and count MAE."""
+        """Compute per-class precision/recall/F1 using center-based Hungarian matching."""
         self.model.eval()
         K = self.cfg_all.data.num_classes
         thresholds = self.cfg_all.postprocess.thresholds
+        min_distances = self.cfg_all.postprocess.min_distances
+        match_radius = self.cfg_all.postprocess.match_radius
         class_names = self.cfg_all.data.class_names
 
         tp = [0.0] * K
@@ -113,27 +120,37 @@ class Trainer:
         with torch.no_grad():
             for batch in tqdm(self.val_loader, desc="Validating"):
                 images = batch["image"].float().to(self.cfg.device)
-                masks = batch["mask"].float().to(self.cfg.device)
-                counts = batch["count"].float().to(self.cfg.device)
+                masks = batch["mask"].float().cpu().numpy()
+                counts = batch["count"].float().cpu().numpy()
 
                 out = self.model(images)
                 logits = out["final_pred"] if isinstance(out, dict) else out
-                probs = torch.sigmoid(logits)
+                probs = torch.sigmoid(logits).cpu().numpy()
 
-                for k in range(K):
-                    thresh = thresholds[k] if k < len(thresholds) else 0.5
-                    pred_k = probs[:, k]
-                    target_k = masks[:, k]
+                B = images.shape[0]
+                for b in range(B):
+                    gt_centers = extract_gt_centers_from_mask(masks[b], mode="pixel")
+                    pred_centers = extract_pred_centers_from_prob(
+                        probs[b], thresholds, min_distances, use_peak_local_max=True
+                    )
 
-                    tp[k] += ((pred_k > thresh) & (target_k > 0.5)).sum().item()
-                    fp[k] += ((pred_k > thresh) & (target_k <= 0.5)).sum().item()
-                    fn[k] += ((pred_k <= thresh) & (target_k > 0.5)).sum().item()
+                    matched, unmatched_pred, unmatched_gt = hungarian_match(
+                        pred_centers, gt_centers, match_radius
+                    )
 
-                    # Count error: MAE of predicted vs GT counts
-                    pred_count = (pred_k > thresh).sum(dim=(1, 2)).float()
-                    gt_count = counts[:, k]
-                    count_err[k] += torch.abs(pred_count - gt_count).sum().item()
-                    n_samples[k] += images.shape[0]
+                    for k in range(K):
+                        pred_k = [p for p in pred_centers if p["class_id"] == k]
+                        gt_k = [g for g in gt_centers if g["class_id"] == k]
+                        matched_k = [m for m in matched if pred_centers[m[0]]["class_id"] == k]
+
+                        tp[k] += len(matched_k)
+                        fp[k] += len(pred_k) - len(matched_k)
+                        fn[k] += len(gt_k) - len(matched_k)
+
+                        pred_count = len(pred_k)
+                        gt_count = int(counts[b, k])
+                        count_err[k] += abs(pred_count - gt_count)
+                        n_samples[k] += 1
 
         rows = []
         f1s = []
@@ -154,7 +171,6 @@ class Trainer:
 
         macro_f1 = sum(f1s) / len(f1s) if f1s else 0.0
 
-        # Save val_metrics.csv
         df = pd.DataFrame(rows)
         df.to_csv("val_metrics.csv", index=False)
 

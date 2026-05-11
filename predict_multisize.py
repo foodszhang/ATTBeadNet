@@ -29,7 +29,7 @@ def extract_peaks_per_class(
     min_distances: List[int]
 ) -> List[Dict]:
     """
-    Extract peak centers per class from probability maps.
+    Extract peak centers per class from probability maps using peak_local_max.
 
     Args:
         prob_maps: np.ndarray [K, H, W] - probability maps for K classes
@@ -39,21 +39,25 @@ def extract_peaks_per_class(
     Returns:
         List of dicts: [{"class_id": k, "x": int, "y": int, "score": float}, ...]
     """
+    from skimage.feature import peak_local_max
+
     K, H, W = prob_maps.shape
     centers = []
 
     for k in range(K):
-        binary = prob_maps[k] > thresholds[k]
-        labeled = measure.label(binary, connectivity=2)
-        props = measure.regionprops(labeled, intensity_image=prob_maps[k])
+        coords = peak_local_max(
+            prob_maps[k],
+            min_distance=min_distances[k] if k < len(min_distances) else 3,
+            threshold_abs=thresholds[k] if k < len(thresholds) else 0.5,
+            exclude_border=False,
+        )
 
-        for prop in props:
-            centroid = prop.centroid  # (row, col) = (y, x)
-            y, x = int(np.round(centroid[0])), int(np.round(centroid[1]))
-            # Clamp to valid range
+        for y, x in coords:
+            y = int(np.round(y))
+            x = int(np.round(x))
             y = min(max(y, 0), H - 1)
             x = min(max(x, 0), W - 1)
-            score = float(prop.mean_intensity)
+            score = float(prob_maps[k, y, x])
             centers.append({
                 "class_id": k,
                 "x": x,
