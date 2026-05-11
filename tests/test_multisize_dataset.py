@@ -1,4 +1,4 @@
-import os, tempfile, numpy as np, tifffile
+import os, tempfile, numpy as np, torch, tifffile
 import importlib.util
 spec = importlib.util.spec_from_file_location("multisize_dataset", "/home/foods/pro/ATTBeadNet/datasets/multisize_dataset.py")
 _mod = importlib.util.module_from_spec(spec)
@@ -29,6 +29,7 @@ tile_id,source_dataset,source_image_id,split,image_path,mask_path,y0,x0,tile_siz
         assert sample["image"].shape == (1, 64, 64)
         assert sample["mask"].shape == (2, 64, 64)
         assert sample["count"].shape == (2,)
+        assert sample["count"].dtype == torch.int64
         assert sample["tile_id"] == "20260511_1_y0_x0"
         assert sample["class_names"] == ["1.0", "2.8"]
         assert isinstance(sample["source_image_id"], str)

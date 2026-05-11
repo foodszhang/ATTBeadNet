@@ -40,15 +40,11 @@ class MultiSizeBeadTileDataset(Dataset):
         split: str = "train_pool",
         num_classes: Optional[int] = None,
         transform=None,
-        return_count: bool = True,
-        input_mode: str = "rf",
         manifest_name: str = "manifest.csv",
     ):
         self.root_dir = root_dir
         self.split = split
         self.transform = transform
-        self.return_count = return_count
-        self.input_mode = input_mode
 
         self.manifest = MultiSizeTileManifest(root_dir, manifest_name)
         self.df = self.manifest.filter(split)
@@ -71,7 +67,7 @@ class MultiSizeBeadTileDataset(Dataset):
         image = tifffile.imread(image_path)
         if image.ndim == 2:
             image = np.expand_dims(image, axis=0)  # [1, H, W]
-        image = image.astype(np.float32) / 255.0  # [0, 1] range
+        image = image.astype(np.float32)
 
         # Load mask
         mask_path = os.path.join(self.root_dir, row["mask_path"])
