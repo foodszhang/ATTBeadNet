@@ -2,7 +2,8 @@ from .multisize_dataset import MultiSizeBeadTileDataset, MultiSizeTileManifest
 import torch
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image
-import torchvision.transforms.functional as F
+# torchvision deferred to avoid version conflict in some envs
+# used by OriginBeadDataset and MaskBeadDataset (not MultiSizeBeadTileDataset)
 import skimage as ski
 from pathlib import Path
 import numpy as np
