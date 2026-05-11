@@ -281,9 +281,14 @@ def main():
     for img_id in image_ids:
         # Load image
         img_path = os.path.join(args.raw_root, args.image_dir, f"{img_id}{args.image_suffix}")
-        img = tifffile.imread(img_path)
+        try:
+            img = tifffile.imread(img_path)
+        except Exception as e:
+            warnings.warn(f"Failed to read image {img_path}: {e}, skipping")
+            continue
         if img.ndim != 2:
-            raise ValueError(f"Image {img_path} is not 2D: shape={img.shape}")
+            warnings.warn(f"Image {img_path} is not 2D: shape={img.shape}, skipping")
+            continue
         img = img.astype(np.float32)
 
         # Normalize
@@ -293,22 +298,33 @@ def main():
         mask_stack = []
         for class_dir in args.class_dirs:
             mask_path = os.path.join(args.raw_root, class_dir, f"{img_id}{args.mask_suffix}")
-            m = tifffile.imread(mask_path)
+            try:
+                m = tifffile.imread(mask_path)
+            except Exception as e:
+                warnings.warn(f"Failed to read mask {mask_path}: {e}, skipping image {img_id}")
+                mask_stack = None
+                break
             if m.ndim != 2:
-                raise ValueError(f"Mask {mask_path} is not 2D: shape={m.shape}")
+                warnings.warn(f"Mask {mask_path} is not 2D: shape={m.shape}, skipping image {img_id}")
+                mask_stack = None
+                break
             # Convert to uint8 if needed
             if m.dtype != np.uint8:
                 m = m.astype(np.uint8)
             mask_stack.append(m)
 
+        if mask_stack is None:
+            continue
+
         mask_stack = np.stack(mask_stack, axis=0)  # [K, H, W]
 
         # Verify shapes match
         if mask_stack.shape[1:] != img_norm.shape:
-            raise ValueError(
+            warnings.warn(
                 f"Image/mask shape mismatch for {img_id}: "
-                f"image={img_norm.shape}, mask={mask_stack.shape[1:]}"
+                f"image={img_norm.shape}, mask={mask_stack.shape[1:]}, skipping"
             )
+            continue
 
         # Sliding window
         for tile in sliding_window(img_norm, mask_stack, args.tile_size, args.stride):
