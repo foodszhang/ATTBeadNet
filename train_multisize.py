@@ -234,13 +234,18 @@ def main(args):
     np.random.seed(seed)
 
     # Data
+    print(f"Training target mode: {cfg.target.mode}, radius_per_class: {cfg.target.radius_per_class}")
     train_ds = MultiSizeBeadTileDataset(
         root_dir=cfg.data.train_root,
         split="train_pool",
+        target_mode=cfg.target.mode,
+        radius_per_class=cfg.target.radius_per_class,
     )
     val_ds = MultiSizeBeadTileDataset(
         root_dir=cfg.data.train_root,
         split="internal_val",
+        target_mode=cfg.target.mode,
+        radius_per_class=cfg.target.radius_per_class,
     )
 
     train_loader = DataLoader(
