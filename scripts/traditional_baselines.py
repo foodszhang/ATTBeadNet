@@ -8,7 +8,11 @@ Methods:
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import platform
+import sys
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +30,6 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -78,6 +81,96 @@ def image_files(input_dir):
     )
 
 
+def _image_id_sort_key(image_id):
+    image_id = str(image_id)
+    return (0, int(image_id)) if image_id.isdigit() else (1, image_id)
+
+
+def _normalize_image_id(value):
+    """Normalize CSV identifiers without silently accepting fractional IDs."""
+    if pd.isna(value):
+        raise ValueError("manifest.csv contains a missing source_image_id")
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        if not float(value).is_integer():
+            raise ValueError(f"source_image_id must be integral or text, got {value!r}")
+        return str(int(value))
+    text = str(value).strip()
+    if not text:
+        raise ValueError("manifest.csv contains an empty source_image_id")
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
+def validate_dataset(raw_root, image_ids):
+    """Fail early when an evaluated image or either class mask is unavailable."""
+    raw_root = Path(raw_root)
+    rf_dir = raw_root / "RF"
+    if not rf_dir.is_dir():
+        raise FileNotFoundError(f"RF image directory not found: {rf_dir}")
+    if not image_ids:
+        raise ValueError("the selected split contains no source images")
+
+    missing = []
+    for image_id in image_ids:
+        image_path = rf_dir / f"{image_id}.tif"
+        if not image_path.is_file():
+            missing.append(str(image_path))
+        for class_dir in CLASS_DIRS:
+            mask_path = resolve_mask_path(raw_root, class_dir, image_id, "_Mask.tif")
+            if not mask_path.is_file():
+                missing.append(str(mask_path))
+    if missing:
+        preview = "\n  ".join(missing[:10])
+        remainder = len(missing) - min(len(missing), 10)
+        suffix = f"\n  ... and {remainder} more" if remainder else ""
+        raise FileNotFoundError(f"missing required images or masks:\n  {preview}{suffix}")
+
+
+def package_versions():
+    versions = {}
+    for distribution in ("numpy", "pandas", "scipy", "scikit-image", "scikit-learn", "tifffile"):
+        try:
+            versions[distribution] = metadata.version(distribution)
+        except metadata.PackageNotFoundError:
+            versions[distribution] = None
+    return versions
+
+
+def write_run_metadata(args, train_ids, eval_ids):
+    """Record the protocol inputs needed to interpret a generated result set."""
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "baseline_implementation": "multisize reimplementation; not an archived original workflow",
+        "train_split": "train_pool" if "svm_patch" in args.methods else None,
+        "train_source_image_ids": train_ids if "svm_patch" in args.methods else [],
+        "eval_split": args.eval_split,
+        "eval_source_image_ids": eval_ids,
+        "held_out_validation": args.eval_split == "internal_val",
+        "parameters": {
+            "methods": args.methods,
+            "match_radius": args.match_radius,
+            "min_distance": args.min_distance,
+            "svm_threshold": args.svm_threshold,
+            "max_neg_per_image": args.max_neg_per_image,
+        },
+        "paths": {
+            "raw_root": str(Path(args.raw_root).resolve()),
+            "processed_root": str(Path(args.processed_root).resolve()) if args.processed_root else None,
+        },
+        "runtime": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "packages": package_versions(),
+        },
+    }
+    with (out_dir / "run_metadata.json").open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
 def suppress_close_centers(centers, min_distance, class_aware=True):
     """Greedily retain the highest-scoring center within each local neighborhood."""
     if min_distance <= 0:
@@ -118,12 +211,37 @@ def load_gt_centers(raw_root, image_id, class_dirs=CLASS_DIRS):
 
 
 def split_image_ids(raw_root, processed_root, split):
-    rf_ids = [p.stem for p in image_files(Path(raw_root) / "RF")]
-    if split == "all" or not processed_root:
-        return sorted(rf_ids, key=lambda x: int(x) if x.isdigit() else x)
-    manifest = pd.read_csv(Path(processed_root) / "manifest.csv")
-    ids = manifest[manifest["split"] == split]["source_image_id"].astype(str).unique().tolist()
-    return sorted(ids, key=lambda x: int(x) if x.isdigit() else x)
+    rf_dir = Path(raw_root) / "RF"
+    if not rf_dir.is_dir():
+        raise FileNotFoundError(f"RF image directory not found: {rf_dir}")
+    rf_ids = {path.stem for path in image_files(rf_dir)}
+    if split == "all":
+        return sorted(rf_ids, key=_image_id_sort_key)
+    if not processed_root:
+        raise ValueError("--processed-root is required unless --eval-split all is used")
+
+    manifest_path = Path(processed_root) / "manifest.csv"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"split manifest not found: {manifest_path}")
+    manifest = pd.read_csv(manifest_path)
+    required_columns = {"split", "source_image_id"}
+    missing_columns = required_columns.difference(manifest.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{manifest_path} is missing required columns: {sorted(missing_columns)}"
+        )
+
+    rows = manifest.loc[manifest["split"] == split, "source_image_id"]
+    if rows.empty:
+        available = sorted(manifest["split"].dropna().astype(str).unique().tolist())
+        raise ValueError(f"split {split!r} has no rows in {manifest_path}; available: {available}")
+    ids = {_normalize_image_id(value) for value in rows.tolist()}
+    unknown = sorted(ids.difference(rf_ids), key=_image_id_sort_key)
+    if unknown:
+        raise ValueError(
+            f"split {split!r} references source images absent from {rf_dir}: {unknown}"
+        )
+    return sorted(ids, key=_image_id_sort_key)
 
 
 def imagej_like_detect(image, min_distance=2):
@@ -424,10 +542,38 @@ def evaluate_method(raw_root, image_ids, out_dir, method_name, detector, match_r
 
 
 def main(args):
-    train_ids = split_image_ids(args.raw_root, args.processed_root, "train_pool")
+    if args.match_radius <= 0:
+        raise ValueError("--match-radius must be greater than zero")
+    if args.min_distance <= 0:
+        raise ValueError("--min-distance must be greater than zero")
+    if not 0.0 <= args.svm_threshold <= 1.0:
+        raise ValueError("--svm-threshold must be between zero and one")
+    if args.max_neg_per_image <= 0:
+        raise ValueError("--max-neg-per-image must be greater than zero")
+
+    train_ids = (
+        split_image_ids(args.raw_root, args.processed_root, "train_pool")
+        if "svm_patch" in args.methods
+        else []
+    )
     eval_ids = split_image_ids(args.raw_root, args.processed_root, args.eval_split)
+    validate_dataset(args.raw_root, sorted(set(train_ids).union(eval_ids), key=_image_id_sort_key))
+
+    overlap = sorted(set(train_ids).intersection(eval_ids), key=_image_id_sort_key)
+    if args.eval_split == "internal_val" and overlap:
+        raise ValueError(
+            "train_pool and internal_val overlap at the source-image level: "
+            f"{overlap}. Regenerate or correct manifest.csv before validation."
+        )
+    if args.eval_split == "all" and "svm_patch" in args.methods:
+        print(
+            "WARNING: --eval-split all includes SVM training images; "
+            "results are exploratory and are not held-out validation."
+        )
+
     print("train ids:", train_ids)
     print("eval ids:", eval_ids)
+    write_run_metadata(args, train_ids, eval_ids)
 
     summaries = []
     if "imagej_like" in args.methods:
